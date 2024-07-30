@@ -7,7 +7,7 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 import functools
-
+from .unet_ir import UNetModel_ir
 from .fp16_util import convert_module_to_f16, convert_module_to_f32
 from .nn import (
     checkpoint,
@@ -89,6 +89,55 @@ def create_model(
     except Exception as e:
         print(f"Got exception: {e} / Randomly initialize")
     return model
+
+def create_model_ir(
+    image_size,
+    num_channels,
+    num_res_blocks,
+    learn_sigma,
+    class_cond,
+    use_checkpoint,
+    attention_resolutions,
+    num_heads,
+    num_heads_upsample,
+    use_scale_shift_norm,
+    dropout,
+    model_path
+):
+    if image_size == 256:
+        channel_mult = (1, 1, 2, 2, 4, 4)
+    elif image_size == 64:
+        channel_mult = (1, 2, 3, 4)
+    elif image_size == 32:
+        channel_mult = (1, 2, 2, 2)
+    else:
+        raise ValueError(f"unsupported image size: {image_size}")
+
+    attention_ds = []
+    for res in attention_resolutions.split(","):
+        attention_ds.append(image_size // int(res))
+
+    model = UNetModel_ir(
+        in_channels=3,
+        model_channels=num_channels,
+        out_channels=(3 if not learn_sigma else 6),
+        num_res_blocks=num_res_blocks,
+        attention_resolutions=tuple(attention_ds),
+        dropout=dropout,
+        channel_mult=channel_mult,
+        num_classes=(NUM_CLASSES if class_cond else None),
+        use_checkpoint=use_checkpoint,
+        num_heads=num_heads,
+        num_heads_upsample=num_heads_upsample,
+        use_scale_shift_norm=use_scale_shift_norm,
+    )
+    try:
+        model.load_state_dict(th.load(model_path, map_location='cpu'))
+    except Exception as e:
+        print(f"Got exception: {e} / Randomly initialize")
+    return model
+
+
 
 class AttentionPool2d(nn.Module):
     """
