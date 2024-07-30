@@ -216,7 +216,7 @@ class GaussianDiffusion:
         raise NotImplementedError
 
     def p_mean_variance(self, model, x, t):
-
+        # DDPM / DDIM 扩散得到的图
         model_output = model(x, self._scale_timesteps(t))
         
         # In the case of "learned" variance, model will give twice channels.
@@ -386,27 +386,25 @@ class DDPM(SpacedDiffusion):
 
 @register_sampler(name='ddim')
 class DDIM(SpacedDiffusion):
-    def p_sample(self, model, x, t, bfHP, infrared, visible, lamb,rho,eta=0.0):
+    def p_sample(self, model, x, t, bfHP, infrared, visible, lamb, rho, eta=0.1): # 论文里写eta应该为0.1 但是git代码是0.0
 
         out = self.p_mean_variance(model, x, t)
 
 
+        # 转换预测的图像从 RGB 到 Y-Cb-Cr 
+        img = out['pred_xstart']
 
-        x_0_hat_ycbcr = rgb_to_ycbcr(out['pred_xstart'])/255 # (-1,1)
-        x_0_hat_y = torch.unsqueeze((x_0_hat_ycbcr[:,0,:,:]),1)
-        assert x_0_hat_y.shape[1]==1
-
-        x_0_hat_y_BF, bfHP = EM_onestep(f_pre = x_0_hat_y,
+        # 对Y通道进行处理
+        x_0_hat_BF, bfHP = EM_onestep(f_pre = img,
                                             I = infrared,
                                             V = visible,
-                                            HyperP = bfHP,lamb=lamb,rho=rho)
-
-        x_0_hat_ycbcr[:,0,:,:] = x_0_hat_y_BF
-        out['pred_xstart'] = ycbcr_to_rgb(x_0_hat_ycbcr*255)
-
+                                            HyperP = bfHP,
+                                            lamb=lamb,
+                                            rho=rho)
+    
+        out['pred_xstart'] = x_0_hat_BF
 
         eps = self.predict_eps_from_x_start(x, t, out['pred_xstart'])
-
 
         alpha_bar = extract_and_expand(self.alphas_cumprod, t, x)
         alpha_bar_prev = extract_and_expand(self.alphas_cumprod_prev, t, x)

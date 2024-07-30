@@ -42,9 +42,11 @@ if __name__ == '__main__':
     logger = get_logger()
     
     # Device setting
-    device_str = f"cuda:{args.gpu}" if torch.cuda.is_available() else 'cpu'
-    logger.info(f"Device set to {device_str}.")
-    device = torch.device(device_str)  
+    # device_str = f"cuda:{args.gpu}" if torch.cuda.is_available() else 'cpu'
+    # logger.info(f"Device set to {device_str}.")
+    # device = torch.device(device_str)  
+    device = "cuda:0"
+    
     
     # Load configurations
     model_config = load_yaml(args.model_config)  
@@ -99,6 +101,9 @@ if __name__ == '__main__':
         sample=np.transpose(sample, (1,2,0))
         sample=cv2.cvtColor(sample,cv2.COLOR_RGB2YCrCb)[:,:,0]
         sample=(sample-np.min(sample))/(np.max(sample)-np.min(sample))
-        sample=((sample)*255)
-        imsave(os.path.join(os.path.join(out_path, 'recon'), "{}.png".format(img_name.split(".")[0])),sample)
+        sample=((sample)*255).astype(np.uint8)
+        save_path = os.path.join(out_path, 'recon')
+        save_name = "{}.png".format(img_name.split(".")[0])
+        imsave(os.path.join(save_path, save_name),sample)
         i = i+1
+        logger.info(f"Save result in {save_path} for image {i}")
