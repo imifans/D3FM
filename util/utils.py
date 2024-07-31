@@ -101,12 +101,12 @@ def evaluate(f,vi,ir):
     sd_value = calculate_sd(f)
     en_value = calculate_en(f)
 
-    print(f"SSIM_1: {ssim_value1}, SSIM_2: {ssim_value2}")
+    print(f"SSIM_1: {ssim_value1:.3f}, SSIM_2: {ssim_value2:.3f}")
     # print(f"Qabf1: {qabf_value1}, Qabf2: {qabf_value2}")
     # print(f"VIF1: {vif_value1}, VIF2: {vif_value2}")
-    print(f"MI1: {mi_value1}, MI2: {mi_value2}")
-    print(f"SD: {sd_value}")
-    print(f"EN: {en_value}")
+    print(f"MI1: {mi_value1:.3f}, MI2: {mi_value2:.3f}")
+    print(f"SD: {sd_value:.3f}")
+    print(f"EN: {en_value:.3f}")
     
 def evaluate_imgs(f_img_folder, vi_img_folder, ir_img_folder, mode):
     # 获取所有图片文件名（假设所有文件夹中的图片名称是一样的）
