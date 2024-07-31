@@ -43,8 +43,8 @@ def EM_onestep(f_pre, I, V, HyperP, lamb=0.5, rho=0.01):
 
     LAMBDA =  lamb
 
-    Y = I - V
-    X = f_pre - V
+    Y = I - V # 自然图像与红外图像的差异
+    X = f_pre - V # 融合图像与自然图像的差异
     #e-step
     D = torch.sqrt(2/tau_b/(X**2+1e-6))
     C = torch.sqrt(2/tau_a/((Y-X+1e-6)**2))
@@ -57,19 +57,19 @@ def EM_onestep(f_pre, I, V, HyperP, lamb=0.5, rho=0.01):
     tau_a = torch.mean(tau_a)
 
     # m-step
-    for s in range(1):
-        H = prox_tv(Y-X,F1,F2, fft_k1, fft_k2, fft_k1sq, fft_k2sq)
 
-        a1=torch.zeros_like(H)
-        a1[:,:,:,:-1]=H[:,:,:,:-1]-H[:,:,:,1:]
-        a1[:,:,:,-1]=H[:,:,:,-1]
-        F1 = (RHO/(2*LAMBDA+RHO))*a1
+    H = prox_tv(Y-X,F1,F2, fft_k1, fft_k2, fft_k1sq, fft_k2sq)
 
-        a2=torch.zeros_like(H)
-        a2[:,:,:-1,:]=H[:,:,:-1,:]-H[:,:,1:,:]
-        a2[:,:,-1,:]=H[:,:,-1,:]
-        F2 = (RHO/(2*LAMBDA+RHO))*a2
-        X = (2*C*Y+RHO*(Y-H))/(2*C+2*D+RHO)
+    a1=torch.zeros_like(H)
+    a1[:,:,:,:-1]=H[:,:,:,:-1]-H[:,:,:,1:]
+    a1[:,:,:,-1]=H[:,:,:,-1]
+    F1 = (RHO/(2*LAMBDA+RHO))*a1
+
+    a2=torch.zeros_like(H)
+    a2[:,:,:-1,:]=H[:,:,:-1,:]-H[:,:,1:,:]
+    a2[:,:,-1,:]=H[:,:,-1,:]
+    F2 = (RHO/(2*LAMBDA+RHO))*a2
+    X = (2*C*Y+RHO*(Y-H))/(2*C+2*D+RHO)
 
     #
     F = I - X # X使得 min x ∥y − x∥1 + φ∥x∥1.成立
