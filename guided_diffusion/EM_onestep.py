@@ -26,7 +26,7 @@ def EM_Initial(IR):
     "fft_k1":fft_k1, "fft_k2":fft_k2, "fft_k1sq":fft_k1sq, "fft_k2sq":fft_k2sq}
     return HP
 
-def EM_onestep(f_pre,I,V,HyperP,lamb=0.5,rho=0.01): 
+def EM_onestep(f_pre, I, V, HyperP, lamb=0.5, rho=0.01): 
     device = f_pre.device
 
     fft_k1 = HyperP["fft_k1"].to(device)
@@ -71,8 +71,8 @@ def EM_onestep(f_pre,I,V,HyperP,lamb=0.5,rho=0.01):
         F2 = (RHO/(2*LAMBDA+RHO))*a2
         X = (2*C*Y+RHO*(Y-H))/(2*C+2*D+RHO)
 
-
-    F = I-X # = I - (f_pre - V) = I + V - f_pre
+    #
+    F = I - X # X使得 min x ∥y − x∥1 + φ∥x∥1.成立
 
     return F,{"C":C, "D":D, "F2":F2, "F1":F1, "H":H, "tau_a":tau_a, "tau_b":tau_b,
     "fft_k1":fft_k1, "fft_k2":fft_k2, "fft_k1sq":fft_k1sq, "fft_k2sq":fft_k2sq}
