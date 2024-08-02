@@ -1,12 +1,9 @@
 from functools import partial
 import os
-import argparse
-import yaml
 import torch
 from guided_diffusion.unet import create_model
 from guided_diffusion.gaussian_diffusion import create_sampler
 from util.logger import get_logger
-import cv2
 import numpy as np
 from skimage.io import imsave
 import warnings
@@ -15,39 +12,29 @@ from util.utils import image_read,load_yaml,norm_img,tensor_to_numpy
 from guided_diffusion.unet import create_model,create_model_ir
 import matplotlib.pyplot as plt
 
-class Args:
-    model_config = 'configs/vi_model_config_imagenet.yaml'
-    ir_model_config = 'configs/ir_model_config_imagenet.yaml'
-    diffusion_config = 'configs/diffusion_config.yaml'
-    
-    
 if __name__ == '__main__':
-    args = Args()
+    model_config = load_yaml('configs/vi_model_config_imagenet.yaml')  
+    ir_model_config = load_yaml('configs/ir_model_config_imagenet.yaml') 
+    diffusion_config = load_yaml('configs/diffusion_config.yaml')
+    
     logger = get_logger()
     device = "cuda:1"
-    d3fm = True
-    input_path="./input"     
-    out_path = './output2'
     mode = 'RGB' #RGB:[1,1,H,W,3] GRAY:[1,1,H,W]
-    # Load configurations
-    model_config = load_yaml(args.model_config)  
-    diffusion_config = load_yaml(args.diffusion_config)
-   
+    input_path="./input"     
+    out_path = f'./output2/{diffusion_config["sampler"]}'
+
     # Load model
     model = create_model(**model_config)
     model = model.to(device)
     model.eval()
-
-    if(d3fm):
-        ir_model_config = load_yaml(args.ir_model_config) 
-        ir_model = create_model_ir(**ir_model_config)  
-        ir_model = ir_model.to(device)
-        ir_model.eval()
+    ir_model = create_model_ir(**ir_model_config)  
+    ir_model = ir_model.to(device)
+    ir_model.eval()
     
-    # Load diffusion sampler
+    # 根据 diffusion_config.sampler 参数来选择sampler
     sampler = create_sampler(**diffusion_config) 
-    sample_fn = partial(sampler.p_sample_loop, model=model)
-   
+    sample_fn = partial(sampler.p_sample_loop, model=model, ir_model = ir_model)
+
     # Working directory
     os.makedirs(out_path, exist_ok=True)
     os.makedirs(os.path.join(out_path, 'recon'), exist_ok=True)
@@ -106,7 +93,14 @@ if __name__ == '__main__':
         plt.show()
 
         with torch.no_grad(): # rho=0.001
-            sample = sample_fn(x_start=x_start, record=True, I = ir_img, V = vi_img, save_root=out_path, img_index = os.path.splitext(img_name)[0], lamb=0.5,rho=0.001)
+            sample = sample_fn(x_start=x_start, 
+                               record=True, 
+                               I = ir_img, 
+                               V = vi_img, 
+                               save_root=out_path, 
+                               img_index = os.path.splitext(img_name)[0], 
+                               lamb=0.5,
+                               rho=0.001)
             
         rgb_image = sample.squeeze().permute(1, 2, 0).cpu().numpy()
         sample_norm=norm_img(rgb_image)
