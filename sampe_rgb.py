@@ -104,10 +104,6 @@ if __name__ == '__main__':
             
         rgb_image = sample.squeeze().permute(1, 2, 0).cpu().numpy()
         sample_norm=norm_img(rgb_image)
-        # 显示图像
-        plt.imshow(sample_norm)
-        plt.axis('off')  # 关闭坐标轴
-        plt.show()
         save_path = os.path.join(out_path, 'recon')
         save_name = "{}.png".format(img_name.split(".")[0])
         imsave(os.path.join(save_path, save_name),sample_norm)

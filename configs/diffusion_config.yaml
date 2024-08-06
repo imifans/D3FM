@@ -1,4 +1,4 @@
-sampler: d3fm_mix
+sampler: ddim
 steps: 3000
 noise_schedule: linear
 model_mean_type: epsilon 

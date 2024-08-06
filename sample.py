@@ -97,7 +97,7 @@ if __name__ == '__main__':
         seed = 3407
         torch.manual_seed(seed)
         x_start = torch.randn((inf_img.repeat(1, 3, 1, 1)).shape, device=device)  
-
+        print(inf_img.shape) # torch.Size([1, 1, 288, 512])
         with torch.no_grad():
             sample = sample_fn(x_start=x_start, record=False, I = inf_img, V = vis_img, save_root=out_path, img_index = os.path.splitext(img_name)[0], lamb=0.5,rho=0.001)
             # Convert the tensor to a NumPy array and adjust dimensions

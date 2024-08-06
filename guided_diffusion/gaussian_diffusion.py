@@ -5,11 +5,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm.auto import tqdm
-
+import util.utils as utils
 
 from .posterior_mean_variance import get_mean_processor, get_var_processor
 
-from .EM_onestep import EM_Initial,EM_onestep,EM_onestep_2
+from .EM_onestep import EM_Initial,EM_onestep,EM_onestep_2, EM_f
 from util.pytorch_colors import rgb_to_ycbcr, ycbcr_to_rgb
 from skimage.io import imsave
 import cv2
@@ -404,22 +404,23 @@ class DDPM(SpacedDiffusion):
 @register_sampler(name='ddim')
 class DDIM(SpacedDiffusion):
     def p_sample(self, model, x, t, bfHP, infrared, visible, lamb, rho, eta=0.1, ir_model = None): # 噪声的标准差 论文里写eta应该为0.1 但是git代码是0.0
-        # 获取预测均值和方差
+        # 计算模型对每个时间步 t 的预测均值 x(t-1)_hat
         out = self.p_mean_variance(model, x, t)
-        img = out['pred_xstart']
+        # 模型预测的x0_hat(t)​：当前时刻对x0的预测
+        x0_hat = out['pred_xstart']
 
         # 
-        x_0_hat_BF, bfHP = EM_onestep(f_pre = img,
+        x0_hat_rectify, bfHP = EM_onestep(f_pre = x0_hat,
                                             I = infrared,
                                             V = visible,
                                             HyperP = bfHP,
                                             lamb=lamb,
                                             rho=rho)
-        # 更新预测图像 f0.t
-        out['pred_xstart'] = x_0_hat_BF
-        # 预测噪声
-        eps = self.predict_eps_from_x_start(x, t, out['pred_xstart'])
-        # 计算噪声标准差
+        
+        # 从预测的x0_hat 反推噪声𝜖
+        eps = self.predict_eps_from_x_start(x, t, x0_hat_rectify)
+        
+        # 计算噪声标准差 用于添加扰动
         alpha_bar = extract_and_expand(self.alphas_cumprod, t, x)
         alpha_bar_prev = extract_and_expand(self.alphas_cumprod_prev, t, x)
         sigma = (
@@ -427,25 +428,28 @@ class DDIM(SpacedDiffusion):
             * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
             * torch.sqrt(1 - alpha_bar / alpha_bar_prev)
         )
+        
         # 生成样本
         noise = torch.randn_like(x)
         mean_pred = (
-            out["pred_xstart"] * torch.sqrt(alpha_bar_prev)
+            x0_hat_rectify * torch.sqrt(alpha_bar_prev)
             + torch.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
         )
 
         sample = mean_pred
+        
+        # 增加随机噪声
         if t != 0:
             sample += sigma * noise
         
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}, bfHP
+        return {"sample": sample, "pred_xstart": x0_hat_rectify}, bfHP
 
     def predict_eps_from_x_start(self, x_t, t, pred_xstart):
         coef1 = extract_and_expand(self.sqrt_recip_alphas_cumprod, t, x_t)
         coef2 = extract_and_expand(self.sqrt_recipm1_alphas_cumprod, t, x_t)
         return (coef1 * x_t - pred_xstart) / coef2
 
-@register_sampler(name = "d3fm")
+@register_sampler(name = "d3fm_inorder")
 class D3FM(SpacedDiffusion):
     # 覆盖 p_sample_loop方法, ir和vi的扩散交替进行
     def p_sample_loop(self,
@@ -527,6 +531,7 @@ class D3FM(SpacedDiffusion):
 
         sample = mean_pred
         if t != 0:
+            # 
             sample += sigma * noise
         
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}, bfHP   
@@ -537,7 +542,7 @@ class D3FM(SpacedDiffusion):
         return (coef1 * x_t - pred_xstart) / coef2 
 
 
-@register_sampler(name='d3fm_mix')
+@register_sampler(name='d3fm_x0')
 class D3FM_MIX(SpacedDiffusion):
     def __init__(self, use_timesteps, **kwargs):
         super().__init__(use_timesteps, **kwargs)  # 调用基类的初始化方法
@@ -560,7 +565,7 @@ class D3FM_MIX(SpacedDiffusion):
         device = x_start.device
 
         pbar = tqdm(list(range(self.num_timesteps))[::-1])
-        print("d3fm 混合进行")
+        print("d3fm_x0")
         for idx in pbar:
             time = torch.tensor([idx] * img.shape[0], device=device)
             HP = EM_Initial(I) if time == torch.tensor([self.num_timesteps-1], device=device) else HP
@@ -590,14 +595,18 @@ class D3FM_MIX(SpacedDiffusion):
                 * torch.sqrt((1 - ir_alpha_bar_prev) / (1 - ir_alpha_bar))
                 * torch.sqrt(1 - ir_alpha_bar / ir_alpha_bar_prev)
                 )
+            mean_pred2 = (
+                x_0_hat_BF * torch.sqrt(alpha_bar_prev)
+                + torch.sqrt(1 - alpha_bar_prev - sigma2 ** 2) * eps
+            )
 
             # 生成样本
             noise1 = torch.randn_like(img)
             noise2 = torch.randn_like(img)
         
-            sample = mean_pred1
+            sample = (mean_pred1 + mean_pred2) * 0.5
             if time != 0:
-                sample = (sigma1 * noise1 + sigma2 * noise2) * 0.5
+                sample += (sigma1 * noise1 + sigma2 * noise2) * 0.5
             
             img = sample.detach_()
             
@@ -627,6 +636,203 @@ class D3FM_MIX(SpacedDiffusion):
                                             lamb=lamb,
                                             rho=rho)
         return x_0_hat_BF, bfHP
+
+    def predict_eps_from_x_start(self, x_t, t, pred_xstart):
+        coef1 = extract_and_expand(self.sqrt_recip_alphas_cumprod, t, x_t)
+        coef2 = extract_and_expand(self.sqrt_recipm1_alphas_cumprod, t, x_t)
+        return (coef1 * x_t - pred_xstart) / coef2
+
+@register_sampler(name='d3fm_xt')
+class D3FM_MIX(SpacedDiffusion):
+    def __init__(self, use_timesteps, **kwargs):
+        super().__init__(use_timesteps, **kwargs)  # 调用基类的初始化方法
+        self.other_sampler = get_sampler(name="ddim")
+        
+    # 覆盖 p_sample_loop方法, ir和vi的扩散混合进行
+    def p_sample_loop(self,
+                    model,
+                    ir_model,
+                    x_start,
+                    record, 
+                    I, 
+                    V, 
+                    save_root,
+                    img_index, lamb, rho):
+        """
+        The function used for sampling from noise.
+        """ 
+        fused = x_start
+        device = x_start.device
+
+        pbar = tqdm(list(range(self.num_timesteps))[::-1])
+        print("d3fm_xt")
+        for idx in pbar:
+            time = torch.tensor([idx] * fused.shape[0], device=device)
+            HP = EM_Initial(I) if time == torch.tensor([self.num_timesteps-1], device=device) else HP
+            IRHP = EM_Initial(I) if time == torch.tensor([self.num_timesteps-1], device=device) else IRHP
+            
+            vi_xt_real = self.q_sample(V, time)
+            ir_xt_real = self.q_sample(I, time)
+            
+            #[1,1,288,480] [1,3,288,480]
+            vi_x0_hat, _= self.p_sample(model, x=vi_xt_real, t=time)
+            ir_x0_hat, _= self.p_sample(ir_model, x=ir_xt_real, t=time)
+            
+
+            # xt不是由当前图像扩散的，而是由各自Diffusion往目标图像扩散得到的，也可以通过反向加噪获得
+            #fused, HP = EM_onestep_2(fused, ir_xt_real, vi_xt_real, HyperP = HP, lamb=lamb, rho=rho)
+            fused = EM_f(fused, I, V, epsilon=1e-8)
+            fused_re = fused.detach_()
+            vi_x0 = vi_x0_hat.detach_()
+            ir_x0 = ir_x0_hat.detach_()
+            vi_xt = vi_xt_real.detach_()
+            ir_xt = ir_xt_real.detach_()
+            if record:
+                if  idx < 5:
+                    file_path = os.path.join(save_root, 'progress', str(img_index))
+                    os.makedirs(file_path) if not os.path.exists(file_path) else file_path
+                    imsave(os.path.join(file_path, "{}.png".format(f"fused_{str(idx).zfill(4)}")), utils.norm_sample(fused_re))
+                    imsave(os.path.join(file_path, "{}.png".format(f"vi_x0_{str(idx).zfill(4)}")), utils.norm_sample(vi_x0))
+                    imsave(os.path.join(file_path, "{}.png".format(f"ir_x0_{str(idx).zfill(4)}")), utils.norm_sample(ir_x0))
+                    imsave(os.path.join(file_path, "{}.png".format(f"vi_xt_{str(idx).zfill(4)}")), utils.norm_sample(vi_xt))
+                    imsave(os.path.join(file_path, "{}.png".format(f"ir_xt_{str(idx).zfill(4)}")), utils.norm_sample(ir_xt))
+        return fused_re
+    
+    def p_sample(self, model, x, t): # 噪声的标准差 论文里写eta应该为0.1 但是git代码是0.0
+        out = self.p_mean_variance(model, x, t)
+        return out['pred_xstart'], out['mean']
+
+    def predict_eps_from_x_start(self, x_t, t, pred_xstart):
+        coef1 = extract_and_expand(self.sqrt_recip_alphas_cumprod, t, x_t)
+        coef2 = extract_and_expand(self.sqrt_recipm1_alphas_cumprod, t, x_t)
+        return (coef1 * x_t - pred_xstart) / coef2
+    
+    def add_noise_to_image(self, image, t):
+        """
+        给图像添加噪声到时间步 t。
+        
+        参数:
+        - image: 原始图像
+        - t: 时间步
+        - self: 包含 alphas_cumprod 和其他必需参数的对象
+
+        返回:
+        - 加噪后的图像
+        """
+        # 计算 alpha_bar 和噪声标准差
+        alpha_bar = extract_and_expand(self.alphas_cumprod, t, image)
+        
+        # 生成噪声
+        noise = torch.randn_like(image)
+        
+        # 计算加噪图像
+        noisy_image = torch.sqrt(alpha_bar) * image + torch.sqrt(1 - alpha_bar) * noise
+        
+        return noisy_image
+
+
+    
+    
+@register_sampler(name='d3fm_xt_test')
+class D3FM_MIX(SpacedDiffusion):
+    def __init__(self, use_timesteps, **kwargs):
+        super().__init__(use_timesteps, **kwargs)  # 调用基类的初始化方法
+        self.other_sampler = get_sampler(name="ddim")
+        
+    # 覆盖 p_sample_loop方法, ir和vi的扩散混合进行
+    def p_sample_loop(self,
+                    model,
+                    ir_model,
+                    x_start,
+                    record, 
+                    I, 
+                    V, 
+                    save_root,
+                    img_index, lamb, rho):
+        """
+        The function used for sampling from noise.
+        """ 
+        img = x_start
+        device = x_start.device
+
+        pbar = tqdm(list(range(self.num_timesteps))[::-1])
+        print("d3fm_x0")
+        for idx in pbar:
+            time = torch.tensor([idx] * img.shape[0], device=device)
+            HP = EM_Initial(I) if time == torch.tensor([self.num_timesteps-1], device=device) else HP
+            IRHP = EM_Initial(I) if time == torch.tensor([self.num_timesteps-1], device=device) else IRHP
+            # model, ir_model, x, ir_x, t,
+            eta=0.1
+            x_0_hat_BF, HP, x_t_hat_BF, x_0_hat_BF_original= self.p_sample(model, x=img, t=time, bfHP = HP, infrared = I, visible = V, lamb=lamb, rho=rho)
+            ir_x_0_hat_BF, IRHP, ir_x_t_hat_BF, ir_x_0_hat_BF_original= self.p_sample(ir_model, x=img, t=time, bfHP = IRHP, infrared = I, visible = V, lamb=lamb, rho=rho)
+
+            eps = self.predict_eps_from_x_start(img, time, x_0_hat_BF)
+            # 计算噪声标准差
+            alpha_bar = extract_and_expand(self.alphas_cumprod, time, x_0_hat_BF)
+            alpha_bar_prev = extract_and_expand(self.alphas_cumprod_prev, time, x_0_hat_BF)
+            ir_alpha_bar = extract_and_expand(self.alphas_cumprod, time, ir_x_0_hat_BF)
+            ir_alpha_bar_prev = extract_and_expand(self.alphas_cumprod_prev, time, ir_x_0_hat_BF)
+            sigma1 = (
+                eta
+                * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
+                * torch.sqrt(1 - alpha_bar / alpha_bar_prev)
+                )
+            mean_pred1 = (
+                x_0_hat_BF * torch.sqrt(alpha_bar_prev)
+                + torch.sqrt(1 - alpha_bar_prev - sigma1 ** 2) * eps
+                )
+            sigma2 = (
+                eta
+                * torch.sqrt((1 - ir_alpha_bar_prev) / (1 - ir_alpha_bar))
+                * torch.sqrt(1 - ir_alpha_bar / ir_alpha_bar_prev)
+                )
+            mean_pred2 = (
+                x_0_hat_BF * torch.sqrt(alpha_bar_prev)
+                + torch.sqrt(1 - alpha_bar_prev - sigma2 ** 2) * eps
+            )
+
+            # 生成样本
+            noise1 = torch.randn_like(img)
+            noise2 = torch.randn_like(img)
+        
+            sample = (mean_pred1 + mean_pred2) * 0.5
+            if time != 0:
+                sample += (sigma1 * noise1 + sigma2 * noise2) * 0.5
+            
+            img = sample.detach_()
+            x0 = x_0_hat_BF.detach_()
+            ir_x0 = ir_x_0_hat_BF.detach_()
+            xt = x_t_hat_BF.detach_()
+            ir_xt = ir_x_t_hat_BF.detach_()
+            x0_og = x_0_hat_BF_original.detach_()
+            ir_x0_og = ir_x_0_hat_BF_original.detach_()
+
+            if record:
+                if idx % 5 == 0:
+                    file_path = os.path.join(save_root, 'progress', str(img_index))
+                    os.makedirs(file_path) if not os.path.exists(file_path) else file_path
+                    imsave(os.path.join(file_path, "{}.png".format(f"x_{str(idx).zfill(4)}")), utils.norm_sample(img))
+                    imsave(os.path.join(file_path, "{}.png".format(f"x0_{str(idx).zfill(4)}")), utils.norm_sample(x0))
+                    imsave(os.path.join(file_path, "{}.png".format(f"ir_x0_{str(idx).zfill(4)}")), utils.norm_sample(ir_x0))
+                    imsave(os.path.join(file_path, "{}.png".format(f"xt_{str(idx).zfill(4)}")), utils.norm_sample(xt))
+                    imsave(os.path.join(file_path, "{}.png".format(f"ir_xt_{str(idx).zfill(4)}")), utils.norm_sample(ir_xt))
+                    imsave(os.path.join(file_path, "{}.png".format(f"x0og_{str(idx).zfill(4)}")), utils.norm_sample(x0_og))
+                    imsave(os.path.join(file_path, "{}.png".format(f"ir_x0og_{str(idx).zfill(4)}")), utils.norm_sample(ir_x0_og))
+        return img
+    
+    
+      
+    def p_sample(self, model, x, t, bfHP, infrared, visible, lamb, rho): # 噪声的标准差 论文里写eta应该为0.1 但是git代码是0.0
+        # 获取预测均值和方差
+        out = self.p_mean_variance(model, x, t)
+        # 
+        x_0_hat_BF, bfHP = EM_onestep_2(f_pre = out['pred_xstart'],
+                                            I = infrared,
+                                            V = visible,
+                                            HyperP = bfHP,
+                                            lamb=lamb,
+                                            rho=rho)
+        return x_0_hat_BF, bfHP, out['mean'],out['pred_xstart']
 
     def predict_eps_from_x_start(self, x_t, t, pred_xstart):
         coef1 = extract_and_expand(self.sqrt_recip_alphas_cumprod, t, x_t)

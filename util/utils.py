@@ -2,19 +2,19 @@ import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
 from skimage.measure import shannon_entropy
-from functools import partial
 import os
 import yaml
-import torch
-from guided_diffusion.unet import create_model,create_model_ir
-from guided_diffusion.gaussian_diffusion import create_sampler
-from util.logger import get_logger
 import cv2
 import numpy as np
-from skimage.io import imsave
-import warnings
-import shutil
 import matplotlib.pyplot as plt
+
+def norm_sample(img):
+    temp_img= img.detach().cpu().squeeze().numpy()
+    temp_img=np.transpose(temp_img, (1,2,0))
+    temp_img=cv2.cvtColor(temp_img,cv2.COLOR_RGB2YCrCb)[:,:,0]
+    temp_img=(temp_img-np.min(temp_img))/(np.max(temp_img)-np.min(temp_img))
+    temp_img=((temp_img)*255).astype('uint8')
+    return temp_img
 
 def calculate_ssim(imageA, imageB):
     assert imageA.shape == imageA.shape
@@ -101,10 +101,10 @@ def evaluate(f,vi,ir):
     sd_value = calculate_sd(f)
     en_value = calculate_en(f)
 
-    print(f"SSIM_1: {ssim_value1:.3f}, SSIM_2: {ssim_value2:.3f}")
+    print(f"SSIM_1: {ssim_value1:.3f}, SSIM_2: {ssim_value2:.3f}, total: {(ssim_value1+ssim_value2):.3f}")
     # print(f"Qabf1: {qabf_value1}, Qabf2: {qabf_value2}")
     # print(f"VIF1: {vif_value1}, VIF2: {vif_value2}")
-    print(f"MI1: {mi_value1:.3f}, MI2: {mi_value2:.3f}")
+    print(f"MI1: {mi_value1:.3f}, MI2: {mi_value2:.3f}, total: {(mi_value2+mi_value1):.3f}")
     print(f"SD: {sd_value:.3f}")
     print(f"EN: {en_value:.3f}")
     
@@ -112,35 +112,38 @@ def evaluate_imgs(f_img_folder, vi_img_folder, ir_img_folder, mode):
     # 获取所有图片文件名（假设所有文件夹中的图片名称是一样的）
     vi_images = [f for f in os.listdir(vi_img_folder) if f.endswith('.jpg')]
     for img_name in sorted(vi_images):
-        # 构建完整路径
-        vi_path = os.path.join(vi_img_folder, img_name)
-        ir_path = os.path.join(ir_img_folder, img_name)
-        f_name = img_name.replace('.jpg', '.png')  # 替换扩展名
-        f_path = os.path.join(f_img_folder, f_name)
+        evaluate_imgs_by_name(f_img_folder, vi_img_folder, ir_img_folder, mode, img_name)            
+    
+def evaluate_imgs_by_name(f_img_folder, vi_img_folder, ir_img_folder, mode, img_name):
+    # 构建完整路径
+    vi_path = os.path.join(vi_img_folder, img_name)
+    ir_path = os.path.join(ir_img_folder, img_name)
+    f_name = img_name.replace('.jpg', '.png')  # 替换扩展名
+    f_path = os.path.join(f_img_folder, f_name)
 
-        # 读取图像
-        vi = image_read(vi_path, mode=mode)[np.newaxis, np.newaxis, ...] / 255.0
-        ir = image_read(ir_path, mode=mode)[np.newaxis, np.newaxis, ...] / 255.0
-        f = image_read(f_path, mode=mode)[np.newaxis, np.newaxis, ...] / 255.0
+    # 读取图像
+    vi = image_read(vi_path, mode=mode)[np.newaxis, np.newaxis, ...] / 255.0
+    ir = image_read(ir_path, mode=mode)[np.newaxis, np.newaxis, ...] / 255.0
+    f = image_read(f_path, mode=mode)[np.newaxis, np.newaxis, ...] / 255.0
 
-        # 压缩维度
-        vi = np.squeeze(vi)
-        ir = np.squeeze(ir)
-        f = np.squeeze(f)
-        
-        if(mode == "GRAY"):
-            vi = gray_to_rgb(vi)
-            ir = gray_to_rgb(ir)
-            f = gray_to_rgb(f)
-        
-        scale = 32
-        ir = adjust_image_shape(ir,scale)
-        vi = adjust_image_shape(vi,scale)
-        f = adjust_image_shape(f,scale)
-        assert ir.shape == vi.shape
-        inf_img = ir.squeeze()
-        vis_img = vi.squeeze()
-        f_img = f.squeeze()
-        print(f"--------------------{img_name}--------------------")
-        evaluate(f_img, vis_img, inf_img)
-        #plot(vis_img,inf_img,f_img)
+    # 压缩维度
+    vi = np.squeeze(vi)
+    ir = np.squeeze(ir)
+    f = np.squeeze(f)
+    
+    if(mode == "GRAY"):
+        vi = gray_to_rgb(vi)
+        ir = gray_to_rgb(ir)
+        f = gray_to_rgb(f)
+    
+    scale = 32
+    ir = adjust_image_shape(ir,scale)
+    vi = adjust_image_shape(vi,scale)
+    f = adjust_image_shape(f,scale)
+    assert ir.shape == vi.shape
+    inf_img = ir.squeeze()
+    vis_img = vi.squeeze()
+    f_img = f.squeeze()
+    print(f"--------------------{img_name}--------------------")
+    evaluate(f_img, vis_img, inf_img)
+    plot(vis_img,inf_img,f_img)

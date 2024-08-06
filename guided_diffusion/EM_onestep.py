@@ -2,6 +2,7 @@ import numpy as np
 import os
 import torch
 import torch.fft
+
 # import cv2
 
 def EM_Initial(IR):
@@ -96,9 +97,11 @@ def EM_onestep_2(f_pre, I, V, HyperP, lamb=0.5, rho=0.01):
 
     Y = I - V # 自然图像与红外图像的差异
     X = f_pre - V # 融合图像与自然图像的差异
+    
     #e-step
     D = torch.sqrt(2/tau_b/(X**2+1e-6)) # E(1/m)
     C = torch.sqrt(2/tau_a/((Y-X+1e-6)**2)) # E(1/n)
+    
     D[D>2*C] = 2*C[D>2*C]
     RHO =rho # .5*(C+D)
     
@@ -123,10 +126,83 @@ def EM_onestep_2(f_pre, I, V, HyperP, lamb=0.5, rho=0.01):
     X = (2*C*Y+RHO*(Y-H))/(2*C+2*D+RHO)
 
     #
-    F = I - X # X使得 min x ∥y − x∥1 + φ∥x∥1.成立
+    F = X+V  # X使得 min x ∥y − x∥1 + φ∥x∥1.成立
 
     return F,{"C":C, "D":D, "F2":F2, "F1":F1, "H":H, "tau_a":tau_a, "tau_b":tau_b,
     "fft_k1":fft_k1, "fft_k2":fft_k2, "fft_k1sq":fft_k1sq, "fft_k2sq":fft_k2sq}
+    
+def EM_f(f, I, V, epsilon=1e-8):
+    """
+    使用 EM 算法更新图像 f 使其与图像 I 和 V 更加相似。
+
+    参数:
+    - f: 初始图像 (batch_size, channels, height, width)
+    - I: 红外图像 (batch_size, channels, height, width)
+    - V: 可见光图像 (batch_size, channels, height, width)
+    - epsilon: 小常数，防止除以零 (默认值: 1e-8)
+
+    返回:
+    - 更新后的图像 f
+    """
+    def cal_latent(f, x, epsilon):
+        """
+        计算潜在变量。
+
+        参数:
+        - f: 当前图像 (batch_size, channels, height, width)
+        - x: 给定图像 (batch_size, channels, height, width)
+        - epsilon: 小常数，防止除以零 (默认值: 1e-8)
+
+        返回:
+        - 潜在变量 (batch_size, channels, height, width)
+        """
+        diff = f - x
+        squared_diff = diff**2
+        return 1 / (squared_diff + epsilon)
+    
+    def cal_variance(image):
+        # 计算图像的均值
+        mean = np.mean(image)
+        # 计算方差
+        variance = np.mean((image - mean) ** 2)
+        return variance
+       
+    def cal_variance_rgb(rgb):
+        # 移除 batch 维度
+        rgb_img = rgb.squeeze(0)
+        
+        # 确保图像张量是浮点型，以便计算方差
+        rgb_img = rgb_img.float()
+        
+        # 计算每个通道的方差
+        var_per_channel = rgb_img.var(dim=(1, 2), unbiased=False)  # (3,) 张量
+        
+        # 计算所有通道方差的均值
+        mean_var = var_per_channel.mean()
+        return var_per_channel
+
+    # 计算潜在变量 m 和 n
+    #m = cal_latent(f, V, epsilon)
+    #n = cal_latent(f, I, epsilon)
+    m = cal_variance_rgb(V) / 2
+    n = cal_variance_rgb(I) / 2
+
+    # 使用 m 和 n 更新图像 f  # [1,3,288,489] *[1,3]
+    m = m.view(1, 3, 1, 1)  # 将其扩展为 [1, 3, 1, 1]
+    n = n.view(1, 3, 1, 1)  # 将其扩展为 [1, 3, 1, 1]
+
+    f = (m * I + n * V) / (m + n + epsilon)
+
+    # 计算更新前图像的均值和标准差
+    mean_f = torch.mean(f)
+    std_f = torch.std(f)
+
+    # 归一化图像
+    f = (f - mean_f) / (std_f + epsilon)
+
+    return f
+
+
 
 def prox_tv(X, F1, F2, fft_k1, fft_k2, fft_k1sq, fft_k2sq):
     fft_X = torch.fft.fft2(X)
